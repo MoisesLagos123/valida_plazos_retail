@@ -9,7 +9,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "scraping:ripley": "node src/scraping/ejemplos_ripley.js",
-    "scraping:test": "node -e \"require('./src/scraping/ejemplos_ripley').ejemploBasico()\""
+    "scraping:test": "node -e \"require('./src/scraping/ejemplos_ripley').ejemploBasico()\"",
+    "test:playwright": "node src/scraping/test_playwright_login.js",
+    "playwright:install": "npx playwright install chromium"
   },
   "keywords": [
     "retail",
@@ -18,7 +20,8 @@
     "nodejs",
     "scraping",
     "ripley",
-    "puppeteer"
+    "puppeteer",
+    "playwright"
   ],
   "author": "MoisesLagos123",
   "license": "MIT",
@@ -28,6 +31,7 @@
     "dotenv": "^16.3.1",
     "moment": "^2.29.4",
     "puppeteer": "^21.6.1",
+    "playwright": "^1.41.1",
     "cheerio": "^1.0.0-rc.12",
     "axios": "^1.6.2"
   },

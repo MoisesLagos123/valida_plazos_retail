@@ -1,13 +1,14 @@
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 const { loginRipley, verifyLogin, logoutRipley, keepSessionAlive, RIPLEY_CONFIG } = require('./login/login_ripley');
 require('dotenv').config();
 
 /**
- * Clase principal para scraping de Ripley.cl
+ * Clase principal para scraping de Ripley.cl usando Playwright
  */
 class RipleyScraper {
     constructor() {
         this.browser = null;
+        this.context = null;
         this.page = null;
         this.isLoggedIn = false;
         this.sessionTimeout = null;
@@ -20,30 +21,31 @@ class RipleyScraper {
      */
     async initialize(options = {}) {
         try {
-            console.log('🚀 Inicializando Ripley Scraper...');
+            console.log('🚀 Inicializando Ripley Scraper con Playwright...');
 
             // Configuración del browser
             const browserOptions = {
                 headless: options.headless !== undefined ? options.headless : false,
                 args: [
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=VizDisplayCompositor',
+                    '--disable-ipc-flooding-protection',
+                    '--disable-renderer-backgrounding',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-background-timer-throttling',
                     '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu',
-                    '--window-size=1366,768'
+                    '--disable-setuid-sandbox'
                 ]
             };
 
-            this.browser = await puppeteer.launch(browserOptions);
+            this.browser = await chromium.launch(browserOptions);
             
             // Realizar login
             const loginResult = await loginRipley(this.browser);
             
             if (loginResult.success) {
                 this.page = loginResult.page;
+                this.context = loginResult.context;
                 this.isLoggedIn = true;
                 
                 // Configurar mantenimiento de sesión
@@ -88,14 +90,15 @@ class RipleyScraper {
         try {
             console.log('🔄 Reconectando a Ripley...');
             
-            if (this.page) {
-                await this.page.close();
+            if (this.context) {
+                await this.context.close();
             }
 
             const loginResult = await loginRipley(this.browser);
             
             if (loginResult.success) {
                 this.page = loginResult.page;
+                this.context = loginResult.context;
                 this.isLoggedIn = true;
                 console.log('✅ Reconexión exitosa');
                 return true;
@@ -128,42 +131,90 @@ class RipleyScraper {
 
             // Navegar a la página de búsqueda
             const searchUrl = `${RIPLEY_CONFIG.baseUrl}/buscar?q=${encodeURIComponent(searchTerm)}`;
-            await this.page.goto(searchUrl, { waitUntil: 'networkidle2' });
+            await this.page.goto(searchUrl, { waitUntil: 'networkidle' });
 
-            // Esperar a que carguen los productos
-            await this.page.waitForSelector('.product-item, .catalog-product-item, [data-testid="product"]', { timeout: 10000 });
+            // Esperar a que carguen los productos con múltiples selectores
+            const productSelectors = [
+                '.product-item', 
+                '.catalog-product-item', 
+                '[data-testid="product"]',
+                '.product-card',
+                '.item-product'
+            ];
+
+            let productsFound = false;
+            for (const selector of productSelectors) {
+                try {
+                    await this.page.waitForSelector(selector, { timeout: 5000 });
+                    productsFound = true;
+                    console.log(`✅ Productos encontrados con selector: ${selector}`);
+                    break;
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            if (!productsFound) {
+                console.log('⚠️ No se encontraron productos con los selectores esperados');
+                return [];
+            }
 
             // Extraer información de productos
-            const products = await this.page.evaluate(() => {
-                const productElements = document.querySelectorAll('.product-item, .catalog-product-item, [data-testid="product"]');
+            const products = await this.page.evaluate((options, selectors) => {
                 const results = [];
+                
+                // Probar cada selector hasta encontrar productos
+                for (const selector of selectors) {
+                    const productElements = document.querySelectorAll(selector);
+                    
+                    if (productElements.length > 0) {
+                        productElements.forEach((element, index) => {
+                            try {
+                                // Múltiples selectores para título
+                                const titleSelectors = ['h3', '.product-title', '[data-testid="product-title"]', '.title', '.name'];
+                                let titleElement = null;
+                                for (const titleSel of titleSelectors) {
+                                    titleElement = element.querySelector(titleSel);
+                                    if (titleElement) break;
+                                }
 
-                productElements.forEach((element, index) => {
-                    try {
-                        const titleElement = element.querySelector('h3, .product-title, [data-testid="product-title"]');
-                        const priceElement = element.querySelector('.price, .product-price, [data-testid="price"]');
-                        const linkElement = element.querySelector('a');
-                        const imageElement = element.querySelector('img');
+                                // Múltiples selectores para precio
+                                const priceSelectors = ['.price', '.product-price', '[data-testid="price"]', '.cost', '.amount'];
+                                let priceElement = null;
+                                for (const priceSel of priceSelectors) {
+                                    priceElement = element.querySelector(priceSel);
+                                    if (priceElement) break;
+                                }
 
-                        const product = {
-                            id: index + 1,
-                            title: titleElement ? titleElement.textContent.trim() : 'Sin título',
-                            price: priceElement ? priceElement.textContent.trim() : 'Sin precio',
-                            link: linkElement ? linkElement.href : null,
-                            image: imageElement ? imageElement.src : null,
-                            scraped_at: new Date().toISOString()
-                        };
+                                const linkElement = element.querySelector('a');
+                                const imageElement = element.querySelector('img');
 
-                        if (product.title !== 'Sin título') {
-                            results.push(product);
+                                const product = {
+                                    id: index + 1,
+                                    title: titleElement ? titleElement.textContent.trim() : 'Sin título',
+                                    price: priceElement ? priceElement.textContent.trim() : 'Sin precio',
+                                    link: linkElement ? linkElement.href : null,
+                                    image: imageElement ? imageElement.src : null,
+                                    scraped_at: new Date().toISOString(),
+                                    selector_used: selector
+                                };
+
+                                if (product.title !== 'Sin título') {
+                                    results.push(product);
+                                }
+                            } catch (error) {
+                                console.error('Error procesando producto:', error);
+                            }
+                        });
+                        
+                        if (results.length > 0) {
+                            break; // Salir del loop si encontramos productos
                         }
-                    } catch (error) {
-                        console.error('Error procesando producto:', error);
                     }
-                });
+                }
 
                 return results.slice(0, options.limit || 20);
-            });
+            }, options, productSelectors);
 
             console.log(`✅ Encontrados ${products.length} productos`);
             return products;
@@ -187,32 +238,51 @@ class RipleyScraper {
         try {
             console.log(`📄 Obteniendo detalles del producto: ${productUrl}`);
 
-            await this.page.goto(productUrl, { waitUntil: 'networkidle2' });
+            await this.page.goto(productUrl, { waitUntil: 'networkidle' });
 
-            // Extraer detalles del producto
+            // Extraer detalles del producto con selectores robustos
             const productDetails = await this.page.evaluate(() => {
-                const getTextContent = (selector) => {
-                    const element = document.querySelector(selector);
-                    return element ? element.textContent.trim() : null;
+                const getTextContent = (selectors) => {
+                    if (typeof selectors === 'string') selectors = [selectors];
+                    for (const selector of selectors) {
+                        const element = document.querySelector(selector);
+                        if (element) return element.textContent.trim();
+                    }
+                    return null;
                 };
 
-                const getAttribute = (selector, attribute) => {
-                    const element = document.querySelector(selector);
-                    return element ? element.getAttribute(attribute) : null;
+                const getAttribute = (selectors, attribute) => {
+                    if (typeof selectors === 'string') selectors = [selectors];
+                    for (const selector of selectors) {
+                        const element = document.querySelector(selector);
+                        if (element) return element.getAttribute(attribute);
+                    }
+                    return null;
+                };
+
+                const getAllTextContent = (selectors) => {
+                    if (typeof selectors === 'string') selectors = [selectors];
+                    for (const selector of selectors) {
+                        const elements = document.querySelectorAll(selector);
+                        if (elements.length > 0) {
+                            return Array.from(elements).map(el => el.textContent.trim());
+                        }
+                    }
+                    return [];
                 };
 
                 return {
-                    title: getTextContent('h1, .product-title, [data-testid="product-title"]'),
-                    price: getTextContent('.price, .product-price, [data-testid="price"]'),
-                    originalPrice: getTextContent('.original-price, .old-price'),
-                    discount: getTextContent('.discount, .offer-percentage'),
-                    description: getTextContent('.product-description, .description'),
-                    brand: getTextContent('.brand, .product-brand'),
-                    sku: getTextContent('.sku, .product-sku') || getAttribute('[data-sku]', 'data-sku'),
-                    availability: getTextContent('.availability, .stock-status'),
-                    rating: getTextContent('.rating, .product-rating'),
-                    images: Array.from(document.querySelectorAll('.product-image img, .gallery img')).map(img => img.src),
-                    specifications: Array.from(document.querySelectorAll('.specifications li, .product-specs li')).map(spec => spec.textContent.trim()),
+                    title: getTextContent(['h1', '.product-title', '[data-testid="product-title"]', '.title']),
+                    price: getTextContent(['.price', '.product-price', '[data-testid="price"]', '.cost', '.amount']),
+                    originalPrice: getTextContent(['.original-price', '.old-price', '.was-price']),
+                    discount: getTextContent(['.discount', '.offer-percentage', '.save-amount']),
+                    description: getTextContent(['.product-description', '.description', '.details']),
+                    brand: getTextContent(['.brand', '.product-brand', '.manufacturer']),
+                    sku: getTextContent(['.sku', '.product-sku', '.model']) || getAttribute(['[data-sku]'], 'data-sku'),
+                    availability: getTextContent(['.availability', '.stock-status', '.in-stock']),
+                    rating: getTextContent(['.rating', '.product-rating', '.stars']),
+                    images: Array.from(document.querySelectorAll('.product-image img, .gallery img, .carousel img')).map(img => img.src),
+                    specifications: getAllTextContent(['.specifications li', '.product-specs li', '.features li']),
                     scraped_at: new Date().toISOString(),
                     url: window.location.href
                 };
@@ -242,40 +312,81 @@ class RipleyScraper {
 
             // Navegar a la página de órdenes
             const ordersUrl = process.env.RIPLEY_ORDERS_URL || 'https://simple.ripley.cl/mi-cuenta/mis-compras';
-            await this.page.goto(ordersUrl, { waitUntil: 'networkidle2' });
+            await this.page.goto(ordersUrl, { waitUntil: 'networkidle' });
 
-            // Esperar a que carguen las órdenes
-            await this.page.waitForSelector('.order-item, .purchase-item, [data-testid="order"]', { timeout: 10000 });
+            // Esperar a que carguen las órdenes con múltiples selectores
+            const orderSelectors = [
+                '.order-item', 
+                '.purchase-item', 
+                '[data-testid="order"]',
+                '.order-card',
+                '.purchase-card'
+            ];
+
+            let ordersFound = false;
+            for (const selector of orderSelectors) {
+                try {
+                    await this.page.waitForSelector(selector, { timeout: 5000 });
+                    ordersFound = true;
+                    console.log(`✅ Órdenes encontradas con selector: ${selector}`);
+                    break;
+                } catch (e) {
+                    continue;
+                }
+            }
+
+            if (!ordersFound) {
+                console.log('⚠️ No se encontraron órdenes con los selectores esperados');
+                return [];
+            }
 
             // Extraer información de órdenes
-            const orders = await this.page.evaluate((options) => {
-                const orderElements = document.querySelectorAll('.order-item, .purchase-item, [data-testid="order"]');
+            const orders = await this.page.evaluate((options, selectors) => {
                 const results = [];
+                
+                for (const selector of selectors) {
+                    const orderElements = document.querySelectorAll(selector);
+                    
+                    if (orderElements.length > 0) {
+                        orderElements.forEach((element, index) => {
+                            try {
+                                const getElementText = (selectors) => {
+                                    for (const sel of selectors) {
+                                        const el = element.querySelector(sel);
+                                        if (el) return el.textContent.trim();
+                                    }
+                                    return null;
+                                };
 
-                orderElements.forEach((element, index) => {
-                    try {
-                        const orderNumber = element.querySelector('.order-number, .purchase-number')?.textContent.trim();
-                        const date = element.querySelector('.order-date, .purchase-date')?.textContent.trim();
-                        const status = element.querySelector('.order-status, .purchase-status')?.textContent.trim();
-                        const total = element.querySelector('.order-total, .purchase-total')?.textContent.trim();
+                                const orderNumber = getElementText(['.order-number', '.purchase-number', '.order-id']);
+                                const date = getElementText(['.order-date', '.purchase-date', '.date']);
+                                const status = getElementText(['.order-status', '.purchase-status', '.status']);
+                                const total = getElementText(['.order-total', '.purchase-total', '.total', '.amount']);
 
-                        const order = {
-                            id: index + 1,
-                            orderNumber: orderNumber || `ORDER-${index + 1}`,
-                            date: date || 'Sin fecha',
-                            status: status || 'Sin estado',
-                            total: total || 'Sin total',
-                            scraped_at: new Date().toISOString()
-                        };
+                                const order = {
+                                    id: index + 1,
+                                    orderNumber: orderNumber || `ORDER-${index + 1}`,
+                                    date: date || 'Sin fecha',
+                                    status: status || 'Sin estado',
+                                    total: total || 'Sin total',
+                                    scraped_at: new Date().toISOString(),
+                                    selector_used: selector
+                                };
 
-                        results.push(order);
-                    } catch (error) {
-                        console.error('Error procesando orden:', error);
+                                results.push(order);
+                            } catch (error) {
+                                console.error('Error procesando orden:', error);
+                            }
+                        });
+                        
+                        if (results.length > 0) {
+                            break; // Salir del loop si encontramos órdenes
+                        }
                     }
-                });
+                }
 
                 return results.slice(0, options.limit || 50);
-            }, options);
+            }, options, orderSelectors);
 
             console.log(`✅ Encontradas ${orders.length} órdenes`);
             return orders;
@@ -351,10 +462,10 @@ class RipleyScraper {
                 await logoutRipley(this.page);
             }
 
-            // Cerrar página
-            if (this.page) {
-                await this.page.close();
-                this.page = null;
+            // Cerrar contexto
+            if (this.context) {
+                await this.context.close();
+                this.context = null;
             }
 
             // Cerrar browser
@@ -363,6 +474,7 @@ class RipleyScraper {
                 this.browser = null;
             }
 
+            this.page = null;
             this.isLoggedIn = false;
             console.log('✅ Ripley Scraper cerrado correctamente');
 

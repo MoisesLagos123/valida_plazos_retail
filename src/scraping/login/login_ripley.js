@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer');
+const { chromium } = require('playwright');
 require('dotenv').config();
 
 /**
@@ -17,11 +17,141 @@ const RIPLEY_CONFIG = {
 };
 
 /**
- * Función para realizar login en Ripley.cl
- * @param {Object} browser - Instancia de Puppeteer browser
+ * Configuración anti-detección para Playwright
+ */
+async function createStealthContext(browser) {
+    const context = await browser.newContext({
+        userAgent: RIPLEY_CONFIG.userAgent,
+        viewport: { width: 1366, height: 768 },
+        locale: 'es-CL',
+        acceptDownloads: false,
+        ignoreHTTPSErrors: true,
+        extraHTTPHeaders: {
+            'Accept-Language': RIPLEY_CONFIG.acceptLanguage,
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none'
+        }
+    });
+
+    // Añadir scripts anti-detección
+    await context.addInitScript(() => {
+        // Remover webdriver property
+        Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+        });
+        
+        // Simular plugins del navegador
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => [1, 2, 3, 4, 5]
+        });
+        
+        // Simular idiomas
+        Object.defineProperty(navigator, 'languages', {
+            get: () => ['es-CL', 'es', 'en']
+        });
+
+        // Simular memoria del dispositivo
+        Object.defineProperty(navigator, 'deviceMemory', {
+            get: () => 8
+        });
+
+        // Simular hardware concurrency
+        Object.defineProperty(navigator, 'hardwareConcurrency', {
+            get: () => 4
+        });
+    });
+
+    return context;
+}
+
+/**
+ * Función para encontrar dinámicamente los campos de login
+ * @param {Object} page - Página de Playwright
+ * @returns {Promise<Object>} - Selectores encontrados
+ */
+async function findLoginFields(page) {
+    const emailSelectors = [
+        'input[type="email"]',
+        'input[name="email"]',
+        'input[name="username"]',
+        'input[placeholder*="correo"]',
+        'input[placeholder*="email"]',
+        '#email',
+        '#username',
+        '.email-input',
+        '.username-input',
+        'input[data-testid*="email"]',
+        'input[data-testid*="username"]'
+    ];
+
+    const passwordSelectors = [
+        'input[type="password"]',
+        'input[name="password"]',
+        'input[placeholder*="contraseña"]',
+        'input[placeholder*="password"]',
+        '#password',
+        '.password-input',
+        'input[data-testid*="password"]'
+    ];
+
+    let emailField = null;
+    let passwordField = null;
+
+    // Buscar campo de email
+    for (const selector of emailSelectors) {
+        try {
+            await page.waitForSelector(selector, { timeout: 2000 });
+            emailField = selector;
+            console.log(`✅ Campo de email encontrado: ${selector}`);
+            break;
+        } catch (e) {
+            continue;
+        }
+    }
+
+    // Buscar campo de contraseña
+    for (const selector of passwordSelectors) {
+        try {
+            await page.waitForSelector(selector, { timeout: 2000 });
+            passwordField = selector;
+            console.log(`✅ Campo de contraseña encontrado: ${selector}`);
+            break;
+        } catch (e) {
+            continue;
+        }
+    }
+
+    // Debug: Mostrar todos los inputs si no se encuentran
+    if (!emailField || !passwordField) {
+        console.log('🔍 Analizando todos los campos de input disponibles...');
+        
+        const allInputs = await page.$$eval('input', inputs => 
+            inputs.map(input => ({
+                type: input.type,
+                name: input.name,
+                id: input.id,
+                placeholder: input.placeholder,
+                className: input.className
+            }))
+        );
+        
+        console.log('📋 Inputs encontrados:', JSON.stringify(allInputs, null, 2));
+    }
+
+    return { emailField, passwordField };
+}
+
+/**
+ * Función para realizar login en Ripley.cl con Playwright
+ * @param {Object} browser - Instancia de Playwright browser (opcional)
  * @returns {Promise<Object>} - Resultado del login con page y status
  */
 async function loginRipley(browser = null) {
+    let context;
     let page;
     let shouldCloseBrowser = false;
     
@@ -33,90 +163,120 @@ async function loginRipley(browser = null) {
 
         // Crear browser si no se proporciona
         if (!browser) {
-            browser = await puppeteer.launch({
+            browser = await chromium.launch({
                 headless: false, // Cambiar a true para producción
                 args: [
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-features=VizDisplayCompositor',
+                    '--disable-ipc-flooding-protection',
+                    '--disable-renderer-backgrounding',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-background-timer-throttling',
                     '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--disable-gpu'
+                    '--disable-setuid-sandbox'
                 ]
             });
             shouldCloseBrowser = true;
         }
 
-        page = await browser.newPage();
-
-        // Configurar user agent y headers
-        await page.setUserAgent(RIPLEY_CONFIG.userAgent);
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': RIPLEY_CONFIG.acceptLanguage
-        });
-
-        // Configurar viewport
-        await page.setViewport({ width: 1366, height: 768 });
+        // Crear contexto con configuración anti-detección
+        context = await createStealthContext(browser);
+        page = await context.newPage();
 
         console.log('🚀 Iniciando login en Ripley.cl...');
 
         // Navegar a la página de login
-        await page.goto(RIPLEY_CONFIG.loginUrl, { 
-            waitUntil: 'networkidle2',
+        const response = await page.goto(RIPLEY_CONFIG.loginUrl, { 
+            waitUntil: 'networkidle',
             timeout: 30000 
         });
 
-        console.log('📄 Página de login cargada');
+        console.log(`📄 Página de login cargada - Status: ${response.status()}`);
 
-        // Esperar a que aparezcan los campos de login
-        await page.waitForSelector('input[type="email"], input[name="email"], #email', { timeout: 10000 });
-        await page.waitForSelector('input[type="password"], input[name="password"], #password', { timeout: 10000 });
+        // Verificar si Cloudflare está bloqueando
+        const title = await page.title();
+        console.log(`📝 Título de la página: ${title}`);
 
-        console.log('🔍 Campos de login encontrados');
-
-        // Llenar el campo de email/usuario
-        const emailSelector = await page.$('input[type="email"], input[name="email"], #email');
-        if (emailSelector) {
-            await emailSelector.click();
-            await page.keyboard.type(RIPLEY_CONFIG.username, { delay: 100 });
-            console.log('✅ Email ingresado');
+        if (title.includes('Just a moment') || title.includes('Cloudflare')) {
+            console.log('⚠️ Cloudflare detectado, esperando...');
+            await page.waitForTimeout(5000);
         }
 
+        // Encontrar campos dinámicamente
+        const { emailField, passwordField } = await findLoginFields(page);
+
+        if (!emailField) {
+            throw new Error('Campo de email no encontrado');
+        }
+        if (!passwordField) {
+            throw new Error('Campo de contraseña no encontrado');
+        }
+
+        // Simular comportamiento humano
+        console.log('🤖 Simulando comportamiento humano...');
+        await page.mouse.move(100, 100);
+        await page.waitForTimeout(500 + Math.random() * 1000);
+        await page.mouse.move(300, 400, { steps: 10 });
+
+        // Llenar campo de email
+        console.log('📧 Llenando campo de email...');
+        await page.click(emailField);
+        await page.waitForTimeout(200);
+        await page.fill(emailField, RIPLEY_CONFIG.username);
+        
         // Esperar un momento
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(800 + Math.random() * 500);
 
-        // Llenar el campo de contraseña
-        const passwordSelector = await page.$('input[type="password"], input[name="password"], #password');
-        if (passwordSelector) {
-            await passwordSelector.click();
-            await page.keyboard.type(RIPLEY_CONFIG.password, { delay: 100 });
-            console.log('✅ Contraseña ingresada');
-        }
+        // Llenar campo de contraseña
+        console.log('🔐 Llenando campo de contraseña...');
+        await page.click(passwordField);
+        await page.waitForTimeout(200);
+        await page.fill(passwordField, RIPLEY_CONFIG.password);
 
-        // Esperar un momento antes de hacer clic en el botón
-        await page.waitForTimeout(1000);
+        // Esperar antes de enviar
+        await page.waitForTimeout(1000 + Math.random() * 1000);
 
         // Buscar y hacer clic en el botón de login
-        const loginButton = await page.$('button[type="submit"], input[type="submit"], .btn-login, [data-testid="login-button"]');
-        if (loginButton) {
-            await loginButton.click();
-            console.log('🔐 Botón de login presionado');
-        } else {
-            // Intentar con otros selectores comunes
-            await page.keyboard.press('Enter');
-            console.log('🔐 Enter presionado para login');
+        const submitSelectors = [
+            'button[type="submit"]',
+            'input[type="submit"]',
+            'button:has-text("Iniciar")',
+            'button:has-text("Ingresar")',
+            'button:has-text("Entrar")',
+            '.btn-login',
+            '.login-button',
+            '.submit-button'
+        ];
+
+        let submitButton = null;
+        for (const selector of submitSelectors) {
+            try {
+                await page.waitForSelector(selector, { timeout: 2000 });
+                submitButton = selector;
+                console.log(`✅ Botón de login encontrado: ${selector}`);
+                break;
+            } catch (e) {
+                continue;
+            }
         }
 
-        // Esperar a que la página se redirija o muestre error
+        if (submitButton) {
+            await page.click(submitButton);
+        } else {
+            console.log('⌨️ Usando Enter para enviar formulario...');
+            await page.press(passwordField, 'Enter');
+        }
+
+        console.log('⏳ Esperando respuesta del login...');
+
+        // Esperar navegación o cambios en la página
         try {
-            await page.waitForNavigation({ 
-                waitUntil: 'networkidle2', 
-                timeout: 15000 
-            });
-        } catch (error) {
-            console.log('⏳ Esperando cambios en la página...');
-            await page.waitForTimeout(RIPLEY_CONFIG.waitTime);
+            await Promise.race([
+                page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 }),
+                page.waitForTimeout(15000)
+            ]);
+        } catch (e) {
+            console.log('⚠️ Sin navegación detectada, verificando manualmente...');
         }
 
         // Verificar si el login fue exitoso
@@ -127,6 +287,7 @@ async function loginRipley(browser = null) {
             return {
                 success: true,
                 page: page,
+                context: context,
                 browser: shouldCloseBrowser ? browser : null,
                 message: 'Login exitoso'
             };
@@ -138,7 +299,15 @@ async function loginRipley(browser = null) {
         console.error('❌ Error durante el login en Ripley:', error.message);
         
         if (page) {
-            await page.close();
+            await page.screenshot({ 
+                path: 'debug_login_error.png', 
+                fullPage: true 
+            });
+            console.log('📸 Screenshot de error guardado: debug_login_error.png');
+        }
+
+        if (context) {
+            await context.close();
         }
         
         if (shouldCloseBrowser && browser) {
@@ -149,6 +318,7 @@ async function loginRipley(browser = null) {
             success: false,
             error: error.message,
             page: null,
+            context: null,
             browser: null
         };
     }
@@ -156,7 +326,7 @@ async function loginRipley(browser = null) {
 
 /**
  * Verificar si el login fue exitoso
- * @param {Object} page - Página de Puppeteer
+ * @param {Object} page - Página de Playwright
  * @returns {Promise<boolean>} - True si está logueado
  */
 async function verifyLogin(page) {
@@ -172,7 +342,9 @@ async function verifyLogin(page) {
             '[data-testid="user-menu"]',
             '.mi-cuenta',
             '.user-profile',
-            'a[href*="mi-cuenta"]'
+            'a[href*="mi-cuenta"]',
+            '.logout',
+            '.cerrar-sesion'
         ];
 
         // Verificar si algún indicador está presente
@@ -193,18 +365,14 @@ async function verifyLogin(page) {
         }
 
         // Verificar si hay mensajes de error
-        const errorSelectors = ['.error', '.alert-danger', '.login-error', '[data-testid="error"]'];
-        for (const selector of errorSelectors) {
-            try {
-                const errorElement = await page.$(selector);
-                if (errorElement) {
-                    const errorText = await page.evaluate(el => el.textContent, errorElement);
-                    console.log('❌ Error de login detectado:', errorText);
-                    return false;
-                }
-            } catch (e) {
-                // Continuar
-            }
+        const pageContent = await page.textContent('body');
+        const hasLoginError = pageContent.includes('credenciales') || 
+                             pageContent.includes('error') || 
+                             pageContent.includes('incorrecto');
+
+        if (hasLoginError) {
+            console.log('❌ Error de login detectado en el contenido');
+            return false;
         }
 
         return false;
@@ -217,7 +385,7 @@ async function verifyLogin(page) {
 
 /**
  * Cerrar sesión en Ripley
- * @param {Object} page - Página de Puppeteer
+ * @param {Object} page - Página de Playwright
  * @returns {Promise<boolean>} - True si el logout fue exitoso
  */
 async function logoutRipley(page) {
@@ -229,18 +397,17 @@ async function logoutRipley(page) {
             'a[href*="cerrar-sesion"]',
             '.logout',
             '[data-testid="logout"]',
-            '.salir'
+            '.salir',
+            'button:has-text("Cerrar sesión")',
+            'a:has-text("Cerrar sesión")'
         ];
 
         for (const selector of logoutSelectors) {
             try {
-                const logoutButton = await page.$(selector);
-                if (logoutButton) {
-                    await logoutButton.click();
-                    await page.waitForTimeout(2000);
-                    console.log('✅ Logout exitoso');
-                    return true;
-                }
+                await page.click(selector);
+                await page.waitForTimeout(2000);
+                console.log('✅ Logout exitoso');
+                return true;
             } catch (e) {
                 // Continuar con el siguiente selector
             }
@@ -256,7 +423,7 @@ async function logoutRipley(page) {
 
 /**
  * Mantener la sesión activa
- * @param {Object} page - Página de Puppeteer
+ * @param {Object} page - Página de Playwright
  * @returns {Promise<boolean>} - True si la sesión está activa
  */
 async function keepSessionAlive(page) {

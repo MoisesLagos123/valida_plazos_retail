@@ -1,7 +1,7 @@
 {
   "name": "valida_plazos_retail",
-  "version": "1.0.0",
-  "description": "Sistema para validación de plazos en retail con funcionalidades de scraping",
+  "version": "1.1.0",
+  "description": "Sistema para validación de plazos en retail con funcionalidades de scraping usando Playwright",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
@@ -11,7 +11,8 @@
     "scraping:ripley": "node src/scraping/ejemplos_ripley.js",
     "scraping:test": "node -e \"require('./src/scraping/ejemplos_ripley').ejemploBasico()\"",
     "test:playwright": "node src/scraping/test_playwright_login.js",
-    "playwright:install": "npx playwright install chromium"
+    "playwright:install": "npx playwright install chromium",
+    "scraping:quick": "node -e \"require('./src/scraping/scraping_ripley').quickScrape('search', 'notebook', {limit: 3}).then(console.log)\""
   },
   "keywords": [
     "retail",
@@ -20,8 +21,8 @@
     "nodejs",
     "scraping",
     "ripley",
-    "puppeteer",
-    "playwright"
+    "playwright",
+    "automation"
   ],
   "author": "MoisesLagos123",
   "license": "MIT",
@@ -30,15 +31,13 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "moment": "^2.29.4",
-    "puppeteer": "^21.6.1",
     "playwright": "^1.41.1",
     "cheerio": "^1.0.0-rc.12",
     "axios": "^1.6.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1",
-    "jest": "^29.7.0",
-    "@types/puppeteer": "^7.0.4"
+    "jest": "^29.7.0"
   },
   "engines": {
     "node": ">=16.0.0"

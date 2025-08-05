@@ -47,6 +47,8 @@ valida_plazos_retail/
 │   ├── routes/         # Definición de rutas
 │   ├── middleware/     # Middlewares personalizados
 │   ├── utils/          # Funciones utilitarias
+│   ├── scraping/       # Módulos de scraping
+│   │   └── login/      # Funcionalidades de login
 │   └── index.js        # Punto de entrada de la aplicación
 ├── tests/              # Pruebas unitarias e integración
 ├── .env.example        # Ejemplo de variables de entorno
@@ -114,7 +116,7 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 - **Express.js** - Framework web
 - **CORS** - Habilitación de CORS
 - **Moment.js** - Manejo de fechas
-- **Jest** - Framework de testing
+- **Jest** - Framework de testing  
 - **Nodemon** - Desarrollo (hot reload)
 
 ## 📊 Estado del Proyecto
@@ -122,6 +124,7 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 - ✅ Configuración inicial
 - ✅ Estructura de carpetas
 - ✅ Servidor básico con Express
+- ✅ Módulos de scraping organizados
 - 🔄 En desarrollo...
 
 ## 🚧 Próximas Funcionalidades
@@ -130,6 +133,7 @@ Este proyecto está bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) par
 - [ ] Conexión a base de datos
 - [ ] Validación de plazos específicos
 - [ ] API REST completa
+- [ ] Funcionalidades de scraping
 - [ ] Documentación con Swagger
 - [ ] Tests unitarios
 - [ ] Docker containerization
